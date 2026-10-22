@@ -11,6 +11,7 @@ import django
 django.setup()  # noqa: E402
 
 from django.conf import settings
+from weblate.auth.models import User
 from weblate.lang.models import Language
 from weblate.trans.models import Alert, Project
 from weblate.trans.tasks import perform_load
@@ -123,6 +124,7 @@ def main():
             perform_load(new_component.pk, force=True)
 
     add_spanish_to_components_without_po()
+    dismiss_community_alerts()
 
 
 def add_spanish_to_components_without_po():
@@ -139,5 +141,30 @@ def add_spanish_to_components_without_po():
                     'Could not add Spanish to component %s: %s',
                     component, component.new_lang_error_message,
                 )
+        except Exception as e:
+            logger.exception(e)
+
+
+# Weblate community alerts that do not apply to Odoo modules, with the reason.
+DISMISSED_ALERTS = {
+    'RecommendedXgettextAddon': 'Odoo exports our .pot files; xgettext does not apply.',
+    'MissingScreenshots': 'We do not use screenshots for Odoo modules.',
+    'MissingTranslationFlags': 'Odoo .po files already carry the format flags.',
+}
+
+
+def dismiss_community_alerts():
+    """Dismiss the community alerts listed in DISMISSED_ALERTS."""
+    user = User.objects.filter(is_superuser=True, is_active=True).first()
+    if not user:
+        logger.info('No active superuser to dismiss alerts')
+        return
+    alerts = Alert.objects.filter(
+        name__in=DISMISSED_ALERTS, dismissed_at__isnull=True,
+    ).select_related('component')
+    for alert in alerts:
+        logger.info('Dismissing %s on component %s', alert.name, alert.component)
+        try:
+            alert.dismiss(user, DISMISSED_ALERTS[alert.name])
         except Exception as e:
             logger.exception(e)
